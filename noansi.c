@@ -2,10 +2,13 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <unistd.h>
 #include <sys/types.h>
 
 /* noansi: rough translator from cp437+dosansi -> ascii+mirc colors
  * cstone@pobox.com
+ *
+ * run noansi -h for usage
  *
  * references used here: ctlseqs.ms (xorg source); ms-dos 6.22 help (ansi.sys);
  * ecma-48; (http://www.ecma-international.org/publications/standards/Ecma-048.htm);
@@ -66,6 +69,9 @@ typedef u_int32_t achar_t;
 static const unsigned int default_fg = aWHITE, default_bg = aBLACK;
 static const unsigned char default_ch = ' ';
 static const achar_t default_char = AC(' ', aWHITE, aBLACK, ACF_UNCHANGED);
+
+static int expandtab = 0;
+static int includez = 0;
 
 static int errors = 0;
 
@@ -136,8 +142,9 @@ static void clear_screen(achar_t screen[NROWS][NCOLS]) {
     }
 }
 static void read_ansi(FILE *f, achar_t screen[NROWS][NCOLS]) {
-    unsigned char x = 0, y = 0, savedx = 255, savedy = 255, delta;
+    unsigned char y = 0, savedx = 255, savedy = 255, delta;
     int c, d;
+    unsigned int x = 0;
     unsigned int curbg = aBLACK, curfg = aWHITE, curflags = 0, wrapping = 1;
     while((c = fgetc(f)) != EOF) {
         int params[3] = { -1, -1, -1 }, np = 0, bidx = 0, i, quesflag = 0,
@@ -152,9 +159,11 @@ static void read_ansi(FILE *f, achar_t screen[NROWS][NCOLS]) {
             } else if(c == 0xd) {
                 y = 0;
                 continue;
-            } else if(c == 0x9) {
+            } else if(c == 0x9 && expandtab == 1) {
                 y = MIN(NCOLS-1, ((y + 8) & 0xf8));
                 continue;
+            } else if(c == 0x1a && includez == 0) {
+                return;
             }
             screen[x][y] = AC(c, curfg, curbg, curflags);
             /* last-line wrapping behavior may need to change */
@@ -173,12 +182,17 @@ static void read_ansi(FILE *f, achar_t screen[NROWS][NCOLS]) {
         } else if(d != '[') {
             doerror("unknown sequence EOF 0x%d at pos %ld, aborting\n",
                     d, ftell(f)-1);
-        } 
+        } else if(d == 0x1a && includez == 0) {
+            return;
+        }
         while((d = fgetc(f)) != EOF) {
             curseqlen++;
             if(curseqlen == MAXSEQLEN) {
                 doerror("reached max sequence length %u at position %ld, aborting\n",
                         curseqlen, ftell(f)-1);
+            }
+            if(d == 0x1a && includez == 0) {
+                return;
             }
             if(isdigit(d)) {
                 if(bidx == sizeof(nbuf)-1) {
@@ -376,8 +390,8 @@ static void read_ansi(FILE *f, achar_t screen[NROWS][NCOLS]) {
  * colors this doesn't matter; for others, we flip the ACF_BGBOLD flag.
  */
 static const unsigned char cp437_to_ascii_map[] = {
-    /* 00 */  ' ', '@', '@', '*',   'x', 'A', '*', ' ',
-    /* 08 */  ' ', ' ', ' ', ' ',   ' ', ' ', 'M', '*',
+    /* 00 */  ' ', '@', '@', '*',   'x', 'A', '*', '*',
+    /* 08 */  '*', 'o', '*', '6',   'Q', 'f', 'M', '*',
     /* 10 */  '>', '<', '$', '!',   'P', 'S', '_', '$',
     /* 18 */  '^', 'v', '>', '<',   '_', '-', 'A', 'v',
     /* 20 */  ' ', '!', '"', '#',   '$', '%', '&', '\'',
@@ -461,7 +475,6 @@ static void normalize(achar_t screen[NROWS][NCOLS]) {
 }
 static void output_mirc(achar_t screen[NROWS][NCOLS], unsigned short colstart, unsigned short colend) {
     int i, j, lasti = 0;
-    unsigned int started = 0;
     for(i = NROWS-1; i >= 0 && lasti == 0; i--) {
         for(j = 0; j < NCOLS; j++) {
             if(screen[i][j] != default_char) {
@@ -477,7 +490,6 @@ static void output_mirc(achar_t screen[NROWS][NCOLS], unsigned short colstart, u
         for(j = NCOLS-1; j >= 0; j--) {
             achar_t ac = screen[i][j];
             if(ac != default_char) {
-                started = 1;
                 break;
             }
         }
@@ -527,11 +539,39 @@ static void check(achar_t screen[NROWS][NCOLS]) {
         }
     }
 }
+
+void usage(void) {
+    fprintf(stderr, "args: [-tzh] [START-END]\n");
+    fprintf(stderr, "      -t: expand tabs to 8 spaces like DOS does\n");
+    fprintf(stderr, "      -z: don't stop reading when an EOF (^Z, 0x1a) is encountered");
+    fprintf(stderr, "      -h: show this text\n");
+    fprintf(stderr, "\n      START and END are the lines to display; START is inclusive and END is exclusive\n");
+}
+
+extern int optind;
 int main(int argc, char *argv[]) {
     unsigned short colstart = 0, colend = NCOLS;
-    if(argc > 1) {
+    int ch;
+    while((ch = getopt(argc, argv, "thz")) != -1) {
+        switch (ch) {
+            case 't':
+                expandtab = 1;
+                break;
+            case 'z':
+                includez = 1;
+                break;
+            case 'h':
+             default:
+                 usage();
+                 exit(0);
+        }
+    }
+    argc -= optind;
+    argv += optind;
+    if(argc > 0) {
         unsigned short nc, ne;
-        if(sscanf(argv[1], "%hu-%hu", &nc, &ne) != 2) {
+        if(sscanf(argv[0], "%hu-%hu", &nc, &ne) != 2) {
+            usage();
             doerror("invalid length, expected START-END (0-indexed, START inclusive, END exclusive)\n");
         } else {
             colstart = nc;
