@@ -10,6 +10,8 @@
  *
  * run noansi -h for usage
  *
+ * R.I.P. BANTOWN
+ *
  * references used here: ctlseqs.ms (xorg source); ms-dos 6.22 help (ansi.sys);
  * ecma-48; (http://www.ecma-international.org/publications/standards/Ecma-048.htm);
  * NANSI source (4.0, earlier); various comp.terminals searches; dosbox
