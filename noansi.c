@@ -149,8 +149,11 @@ static void read_ansi(FILE *f, achar_t screen[NROWS][NCOLS]) {
     unsigned int x = 0;
     unsigned int curbg = aBLACK, curfg = aWHITE, curflags = 0, wrapping = 1;
     while((c = fgetc(f)) != EOF) {
-        int params[3] = { -1, -1, -1 }, np = 0, bidx = 0, i, quesflag = 0,
+        int params[512], np = 0, bidx = 0, i, quesflag = 0,
             semicount = 0;
+        for(int parami = 0; parami < sizeof(params)/sizeof(int); parami++) {
+            params[parami] = -1;
+        }
         unsigned int curseqlen = 0;
         char nbuf[5];
         if(c != 27) {
